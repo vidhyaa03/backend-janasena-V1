@@ -139,25 +139,15 @@ from app.models.models import Nomination, Member, Election, Ward, Village, Manda
  
  
 async def get_all_nominations(db: AsyncSession):
- 
     # -------------------------------
-
     # Total count
-
     # -------------------------------
-
     total_result = await db.execute(select(func.count(Nomination.nomination_id)))
-
     total = total_result.scalar_one()
- 
     # -------------------------------
-
     # Fetch nominations with FULL hierarchy
-
     # -------------------------------
-
     result = await db.execute(
-
         select(Nomination)
 
         .options(
@@ -175,13 +165,11 @@ async def get_all_nominations(db: AsyncSession):
                 .joinedload(Assembly.district),
  
             joinedload(Nomination.election),
-
         )
 
         .order_by(Nomination.applied_at.desc())
 
     )
- 
     nominations = result.scalars().all()
  
     # -------------------------------
@@ -397,3 +385,115 @@ async def reject_nomination(
     await db.commit()
 
     return {"message": "Nomination rejected"}
+
+
+ 
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
+from fastapi import HTTPException
+from collections import defaultdict
+ 
+from app.models.models import (
+    Nomination,
+    Member,
+    Ward,
+    Village,
+    Mandal,
+    Assembly,
+)
+ 
+async def get_nominations_by_scope(
+    db: AsyncSession,
+    assembly_id: int | None,
+    mandal_id: int | None,
+    village_id: int | None,
+    ward_id: int | None,
+):
+ 
+    # -------------------------------------------------
+    # 1️⃣ Base Query
+    # -------------------------------------------------
+    query = (
+        select(Nomination)
+        .join(Member)
+        .join(Ward)
+        .join(Village)
+        .join(Mandal)
+        .join(Assembly)
+        .options(
+            joinedload(Nomination.member)
+                .joinedload(Member.ward)
+                .joinedload(Ward.village)
+                .joinedload(Village.mandal)
+                .joinedload(Mandal.assembly),
+            joinedload(Nomination.election),
+        )
+        .order_by(Nomination.applied_at.desc())
+    )
+ 
+    # -------------------------------------------------
+    # 2️⃣ Scope Filter (Priority Based)
+    # -------------------------------------------------
+    if ward_id:
+        query = query.where(Ward.ward_id == ward_id)
+ 
+    elif village_id:
+        query = query.where(Village.village_id == village_id)
+ 
+    elif mandal_id:
+        query = query.where(Mandal.mandal_id == mandal_id)
+ 
+    elif assembly_id:
+        query = query.where(Assembly.assembly_id == assembly_id)
+ 
+    
+    # -------------------------------------------------
+    # 3️⃣ Execute Query (No Pagination)
+    # -------------------------------------------------
+    result = await db.execute(query)
+    rows = result.scalars().all()
+ 
+    # -------------------------------------------------
+    # 4️⃣ Format Response
+    # -------------------------------------------------
+    items = []
+ 
+    for n in rows:
+ 
+        ward = n.member.ward if n.member else None
+        village = ward.village if ward else None
+        mandal = village.mandal if village else None
+        assembly = mandal.assembly if mandal else None
+ 
+        location_parts = [
+            f"Ward {ward.ward_number}" if ward else None,
+            village.village_name if village else None,
+            mandal.mandal_name if mandal else None,
+            assembly.assembly_name if assembly else None,
+        ]
+ 
+        location = ", ".join([p for p in location_parts if p])
+ 
+        items.append({
+            "nomination_id": n.nomination_id,
+            "candidate_id": n.candidate_id,
+            "member_id": n.member_id,
+            "member_name": n.member.name if n.member else None,
+            "mobile": n.member.mobile if n.member else None,
+            "photo_url": n.member.photo_url if n.member else None,
+            "location": location,
+            "status": n.status,
+            "applied_at": n.applied_at,
+            "reviewed_at": n.reviewed_at,
+            "rejection_reason": n.rejection_reason,
+            "election": {
+                "election_id": n.election.election_id,
+                "title": n.election.title,
+                "status": n.election.status,
+            } if n.election else None,
+        })
+ 
+    return {
+        "items": items
+    }
