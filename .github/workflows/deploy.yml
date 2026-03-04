@@ -1,0 +1,21 @@
+name: Build Backend Image
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Docker Login
+      run: echo "${{ secrets.DOCKER_PASS }}" | docker login -u "${{ secrets.DOCKER_USER }}" --password-stdin
+
+    - name: Build Image
+      run: docker build -t drevathi837/backend:latest .
+
+    - name: Push Image
+      run: docker push drevathi837/backend:latest
